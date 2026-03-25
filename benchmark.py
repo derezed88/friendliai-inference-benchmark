@@ -95,14 +95,17 @@ async def stream_request(
     headers: dict,
     model: str,
     prompt: dict,
+    extra_body: dict | None = None,
 ) -> RequestResult:
     payload = {
         "model": model,
-        "messages": [{"role": "system", "content": "You are a helpful assistant."}, prompt],
+        "messages": [{"role": "system", "content": "You are a helpful assistant. /no_think"}, prompt],
         "max_tokens": MAX_TOKENS,
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if extra_body:
+        payload.update(extra_body)
 
     t_start = time.perf_counter()
     t_first_token = None
@@ -167,13 +170,14 @@ async def run_level(
     model: str,
     concurrency: int,
     num_requests: int,
+    extra_body: dict | None = None,
 ) -> LevelResult:
     sem = asyncio.Semaphore(concurrency)
     level = LevelResult(concurrency=concurrency)
 
     async def bounded_request(prompt):
         async with sem:
-            return await stream_request(session, url, headers, model, prompt)
+            return await stream_request(session, url, headers, model, prompt, extra_body)
 
     connector = aiohttp.TCPConnector(limit=concurrency + 4)
     timeout = aiohttp.ClientTimeout(total=120)
@@ -188,7 +192,7 @@ async def run_level(
 # ---------------------------------------------------------------------------
 # Run full benchmark for one engine
 # ---------------------------------------------------------------------------
-async def benchmark_engine(name: str, base_url: str, api_key: str, model: str):
+async def benchmark_engine(name: str, base_url: str, api_key: str, model: str, extra_body: dict | None = None):
     url = f"{base_url.rstrip('/')}/chat/completions"
     headers = {"Content-Type": "application/json"}
     if api_key:
@@ -203,7 +207,7 @@ async def benchmark_engine(name: str, base_url: str, api_key: str, model: str):
     levels = []
     for c in CONCURRENCY_LEVELS:
         print(f"  Concurrency {c:>3d}: sending {REQUESTS_PER_LEVEL} requests...", end="", flush=True)
-        level = await run_level(url, headers, model, c, REQUESTS_PER_LEVEL)
+        level = await run_level(url, headers, model, c, REQUESTS_PER_LEVEL, extra_body)
         ok = len(level.successful)
         fail = len(level.results) - ok
         print(f" done ({ok} ok, {fail} err) "
@@ -315,6 +319,8 @@ Examples:
     p.add_argument("--max-tokens", type=int, default=MAX_TOKENS,
                     help=f"Max output tokens per request (default: {MAX_TOKENS})")
     p.add_argument("--output", default="benchmark_results.png", help="Output chart filename")
+    p.add_argument("--friendli-extra-body", default=None,
+                    help='Extra JSON body for FriendliAI requests (e.g. \'{"chat_template_kwargs":{"enable_thinking":false}}\')')
     return p.parse_args()
 
 
@@ -326,16 +332,18 @@ async def main():
     REQUESTS_PER_LEVEL = args.requests_per_level
     MAX_TOKENS = args.max_tokens
 
+    friendli_extra = json.loads(args.friendli_extra_body) if args.friendli_extra_body else None
+
     # Warm up: send one request to each engine to avoid cold-start skew
     print("Warming up engines...")
-    for name, url, key, model in [
-        ("FriendliAI", args.friendli_url, args.friendli_key, args.friendli_model),
-        ("vLLM", args.vllm_url, args.vllm_key, args.vllm_model),
+    for name, url, key, model, extra in [
+        ("FriendliAI", args.friendli_url, args.friendli_key, args.friendli_model, friendli_extra),
+        ("vLLM", args.vllm_url, args.vllm_key, args.vllm_model, None),
     ]:
         warmup = await run_level(
             f"{url.rstrip('/')}/chat/completions",
             {"Content-Type": "application/json", **({"Authorization": f"Bearer {key}"} if key else {})},
-            model, concurrency=1, num_requests=1,
+            model, concurrency=1, num_requests=1, extra_body=extra,
         )
         ok = len(warmup.successful)
         print(f"  {name}: {'OK' if ok else 'FAILED — ' + warmup.results[0].error if warmup.results else 'no response'}")
@@ -345,6 +353,7 @@ async def main():
         args.friendli_url,
         args.friendli_key,
         args.friendli_model,
+        extra_body=friendli_extra,
     )
 
     vllm_levels = await benchmark_engine(

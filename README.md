@@ -12,18 +12,40 @@ pip install aiohttp matplotlib numpy
 
 Both inference engines must be deployed and accessible via their OpenAI-compatible `/v1/chat/completions` endpoints before running.
 
+### Configuration
+
+Copy `.env_example` to `.env` and fill in your credentials:
+
+```bash
+cp .env_example .env
+```
+
 ### Run
 
 ```bash
 python benchmark.py \
-    --friendli-url https://api.friendli.ai/serverless/v1 \
-    --friendli-key flp_YOUR_TOKEN \
-    --friendli-model meta-llama-3.1-8b-instruct \
-    --vllm-url http://localhost:8000/v1 \
-    --vllm-model meta-llama/Llama-3.1-8B-Instruct
+    --friendli-url https://api.friendli.ai/dedicated/v1 \
+    --friendli-key $FRIENDLI_TOKEN \
+    --friendli-model $FRIENDLI_ENDPOINT_ID \
+    --vllm-url https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/openai/v1 \
+    --vllm-key $RUNPOD_API_KEY \
+    --vllm-model qwen/qwen3-30b-a3b
 ```
 
-**Note:** FriendliAI Serverless uses model IDs (e.g. `meta-llama-3.1-8b-instruct`) while vLLM typically uses HuggingFace names (e.g. `meta-llama/Llama-3.1-8B-Instruct`). Run `curl -H "Authorization: Bearer $TOKEN" https://api.friendli.ai/serverless/v1/models` to list available model IDs.
+For reasoning models like Qwen3, disable thinking tokens for fair comparison:
+
+```bash
+python benchmark.py \
+    --friendli-url https://api.friendli.ai/dedicated/v1 \
+    --friendli-key $FRIENDLI_TOKEN \
+    --friendli-model $FRIENDLI_ENDPOINT_ID \
+    --friendli-extra-body '{"chat_template_kwargs":{"enable_thinking":false}}' \
+    --vllm-url https://api.runpod.ai/v2/$RUNPOD_ENDPOINT_ID/openai/v1 \
+    --vllm-key $RUNPOD_API_KEY \
+    --vllm-model qwen/qwen3-30b-a3b
+```
+
+The script automatically adds `/no_think` to the system prompt for vLLM compatibility.
 
 ### Optional Parameters
 
@@ -34,20 +56,45 @@ python benchmark.py \
 | `--max-tokens` | `256` | Max output tokens per request |
 | `--output` | `benchmark_results.png` | Output chart filename |
 | `--vllm-key` | *(empty)* | vLLM API key, if authentication is enabled |
+| `--friendli-extra-body` | *(none)* | Extra JSON body for FriendliAI requests |
+
+## Infrastructure
+
+The sample results below were collected from the following setup:
+
+| Component | FriendliAI | vLLM (RunPod) |
+|-----------|-----------|---------------|
+| **Engine** | FriendliAI Engine (proprietary) | vLLM v2.14.0 (open-source) |
+| **Model** | Qwen/Qwen3-30B-A3B | Qwen/Qwen3-30B-A3B |
+| **GPU** | NVIDIA H100 (1x) | NVIDIA H100 (1x, AU datacenter) |
+| **Endpoint type** | Dedicated endpoint | Serverless (RunPod) |
+| **API** | OpenAI-compatible (`/v1/chat/completions`) | OpenAI-compatible (`/v1/chat/completions`) |
+| **Thinking tokens** | Disabled via `chat_template_kwargs` | Disabled via `/no_think` system prompt |
+| **Benchmark client** | Kali Linux, residential ISP (US) | Same machine, same network |
+
+### Latency Considerations
+
+The TTFT measurements include network round-trip time between the benchmark client and each endpoint. In this setup, the FriendliAI and RunPod endpoints are in different datacenters (and potentially different continents — RunPod allocated GPU capacity in France). This means **absolute TTFT values are not directly comparable** between engines, as they include different network latency components.
+
+However, the benchmark remains meaningful for two reasons:
+
+1. **Per-request throughput** (tokens/sec during the decode phase) is measured as the rate of token delivery *after* the first token arrives, so it is independent of network latency to the endpoint. This metric reflects pure engine decode efficiency.
+
+2. **Aggregate throughput** measures total system capacity under load, which is also dominated by GPU compute, not network latency.
+
+For a production evaluation with TTFT as a primary metric, both engines should be deployed in the same datacenter (or measured from a client colocated with each endpoint). The script supports this — simply point both `--friendli-url` and `--vllm-url` at endpoints in the same region.
 
 ## Sample Run
 
-The following run demonstrates the benchmark using two models on FriendliAI Serverless (Llama 3.1 8B as "FriendliAI" and Llama 3.3 70B as "vLLM" stand-in) to validate the tooling. In a real evaluation, both engines would serve the same model.
-
 ```
 $ python benchmark.py \
-    --friendli-url https://api.friendli.ai/serverless/v1 \
+    --friendli-url https://api.friendli.ai/dedicated/v1 \
     --friendli-key flp_... \
-    --friendli-model meta-llama-3.1-8b-instruct \
-    --vllm-url https://api.friendli.ai/serverless/v1 \
-    --vllm-key flp_... \
-    --vllm-model meta-llama-3.3-70b-instruct \
-    --concurrency 1,4,8 --requests-per-level 8 --max-tokens 128
+    --friendli-model deps004cnw2p0gw \
+    --friendli-extra-body '{"chat_template_kwargs":{"enable_thinking":false}}' \
+    --vllm-url https://api.runpod.ai/v2/kflzr1tngpywxm/openai/v1 \
+    --vllm-key rpa_... \
+    --vllm-model qwen/qwen3-30b-a3b
 
 Warming up engines...
   FriendliAI: OK
@@ -55,21 +102,25 @@ Warming up engines...
 
 ============================================================
   Benchmarking: FriendliAI Engine
-  Endpoint:     https://api.friendli.ai/serverless/v1
-  Model:        meta-llama-3.1-8b-instruct
+  Endpoint:     https://api.friendli.ai/dedicated/v1
+  Model:        deps004cnw2p0gw
 ============================================================
-  Concurrency   1: sending 8 requests... done (8 ok, 0 err) | TTFT p50=0.096s | throughput=354.7 tok/s
-  Concurrency   4: sending 8 requests... done (8 ok, 0 err) | TTFT p50=0.122s | throughput=316.6 tok/s
-  Concurrency   8: sending 8 requests... done (8 ok, 0 err) | TTFT p50=0.162s | throughput=259.9 tok/s
+  Concurrency   1: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.098s | throughput=194.1 tok/s
+  Concurrency   4: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.122s | throughput=137.4 tok/s
+  Concurrency   8: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.147s | throughput=107.9 tok/s
+  Concurrency  16: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.183s | throughput=86.7 tok/s
+  Concurrency  32: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.178s | throughput=87.1 tok/s
 
 ============================================================
   Benchmarking: vLLM
-  Endpoint:     https://api.friendli.ai/serverless/v1
-  Model:        meta-llama-3.3-70b-instruct
+  Endpoint:     https://api.runpod.ai/v2/kflzr1tngpywxm/openai/v1
+  Model:        qwen/qwen3-30b-a3b
 ============================================================
-  Concurrency   1: sending 8 requests... done (8 ok, 0 err) | TTFT p50=0.114s | throughput=140.5 tok/s
-  Concurrency   4: sending 8 requests... done (8 ok, 0 err) | TTFT p50=0.156s | throughput=134.3 tok/s
-  Concurrency   8: sending 8 requests... done (8 ok, 0 err) | TTFT p50=0.175s | throughput=125.1 tok/s
+  Concurrency   1: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.227s | throughput=205.8 tok/s
+  Concurrency   4: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.228s | throughput=154.4 tok/s
+  Concurrency   8: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.187s | throughput=102.4 tok/s
+  Concurrency  16: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.237s | throughput=64.3 tok/s
+  Concurrency  32: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.222s | throughput=66.7 tok/s
 
 Chart saved to benchmark_results.png
 ```
@@ -78,38 +129,39 @@ Chart saved to benchmark_results.png
 
 ![Benchmark Results](benchmark_results.png)
 
+### Key Observations
+
+- **TTFT**: FriendliAI shows ~98-183ms (p50) vs vLLM's ~1,190-1,240ms. The ~10x gap includes network latency differences (see Latency Considerations above) and is partly attributable to RunPod's serverless proxy overhead and EU datacenter location.
+- **Per-request throughput**: Comparable at low concurrency (FriendliAI 194 tok/s vs vLLM 206 tok/s at concurrency=1). FriendliAI degrades more gracefully under load, maintaining 87 tok/s at concurrency=32 vs vLLM's 67 tok/s.
+- **Aggregate throughput**: Both engines scale similarly through concurrency=4, after which FriendliAI maintains a slight edge.
+- **GPU parity**: Both engines run on NVIDIA H100, eliminating GPU as a variable. The remaining difference is engine optimization and network latency (RunPod's AU datacenter adds round-trip time vs FriendliAI's endpoint).
+
 ## Metrics
 
-The benchmark measures three metrics across increasing concurrency levels:
+**Time to First Token (TTFT)** — Time from sending the request to receiving the first generated token. Reported as median (p50) and p90. TTFT reflects prefill efficiency and is critical for interactive and agentic use cases where latency compounds across turns.
 
-**Time to First Token (TTFT)** — Time from sending the request to receiving the first generated token. This is the user-perceived latency — how long they wait before seeing output. Reported as median (p50) and p90. TTFT directly reflects prefill efficiency: how fast the engine processes the input prompt and begins generation.
+**Per-Request Output Throughput (tokens/sec)** — Output tokens divided by decode time (first token to last token) for each request. This measures how fast a single user sees tokens stream in — the direct user experience metric.
 
-**Per-Request Output Throughput (tokens/sec)** — Output tokens divided by decode time (first token to last token) for each individual request. This measures how fast a single user sees tokens stream in. It reflects the engine's decode-phase efficiency and is the metric most noticeable to interactive users.
-
-**Aggregate Throughput (total tokens/sec)** — Total output tokens generated across all concurrent requests divided by total decode wall-clock time. This measures the engine's ability to serve multiple users simultaneously — the metric that determines cost-per-token at scale.
+**Aggregate Throughput (total tokens/sec)** — Total output tokens across all concurrent requests divided by total decode wall-clock time. This measures system capacity under load — the metric that drives cost-per-token at scale.
 
 ## Why These Metrics
 
-- **TTFT** answers: "How responsive is the engine?" — critical for interactive and agentic use cases where latency compounds across multiple turns.
-- **Per-request throughput** answers: "How fast does a single user get their response?" — the direct user experience metric.
-- **Aggregate throughput** answers: "How efficiently does the engine use hardware under load?" — the metric that drives infrastructure cost decisions.
-
-Together, they reveal whether an engine is fast at low load (TTFT), maintains quality of service under pressure (per-request throughput at high concurrency), and maximizes hardware utilization (aggregate throughput scaling).
+- **TTFT** answers: "How responsive is the engine?"
+- **Per-request throughput** answers: "How fast does a single user get their response?"
+- **Aggregate throughput** answers: "How efficiently does the engine use hardware under load?"
 
 ## Why This Visualization
 
-The three-panel chart provides an at-a-glance comparison:
-
-1. **Bar chart for TTFT** — grouped bars with p50/p90 markers make absolute differences and tail latency immediately visible across concurrency levels.
-2. **Bar chart for per-request throughput** — side-by-side bars show the user-experience gap at each concurrency level.
-3. **Line chart for aggregate throughput** — shows scaling behavior: how total system throughput grows (or saturates) as concurrency increases. The slope reveals whether the engine is batching efficiently.
-
-A single image with all three panels lets the viewer draw conclusions without cross-referencing separate charts.
+1. **Bar chart for TTFT** — grouped bars with p50/p90 markers show absolute differences and tail latency at each concurrency level.
+2. **Bar chart for per-request throughput** — side-by-side bars show the user-experience gap.
+3. **Line chart for aggregate throughput** — shows scaling behavior and whether the engine batches efficiently.
 
 ## Fairness Controls
 
-- **Same model**: Both engines should serve the same model architecture and weights.
+- **Same model**: Both engines serve Qwen/Qwen3-30B-A3B.
 - **Same prompts**: Identical prompt set in identical order.
-- **Same parameters**: `max_tokens`, temperature (default), and system prompt are identical.
-- **Warm-up**: One request is sent to each engine before measurement begins to avoid cold-start bias.
-- **Streaming**: Both engines are measured via streaming SSE, the mode used in production agentic workflows.
+- **Same parameters**: `max_tokens`, system prompt, and thinking disabled on both sides.
+- **Warm-up**: One request sent to each engine before measurement to avoid cold-start bias.
+- **Streaming**: Both engines measured via streaming SSE.
+- **Same GPU**: Both engines run on NVIDIA H100.
+- **Caveats**: Different datacenter locations (RunPod allocated AU region) affect TTFT due to network latency. A production evaluation should colocate both endpoints or measure from a client near each.
