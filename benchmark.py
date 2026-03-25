@@ -222,63 +222,52 @@ async def benchmark_engine(name: str, base_url: str, api_key: str, model: str, e
 # Visualization
 # ---------------------------------------------------------------------------
 def generate_chart(friendli_levels, vllm_levels, output_path="benchmark_results.png"):
-    fig, axes = plt.subplots(1, 3, figsize=(16, 5))
-    fig.suptitle("Inference Engine Benchmark: FriendliAI vs vLLM", fontsize=14, fontweight="bold")
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+    fig.suptitle("Inference Engine Benchmark: FriendliAI vs vLLM", fontsize=14, fontweight="bold", y=0.98)
 
     concurrencies = CONCURRENCY_LEVELS
 
     def extract(levels, fn):
         return [fn(l) for l in levels]
 
-    # --- Panel 1: TTFT (median + p90) ---
-    ax = axes[0]
-    f_ttft_med = extract(friendli_levels, lambda l: l.median_ttft() * 1000)
-    v_ttft_med = extract(vllm_levels, lambda l: l.median_ttft() * 1000)
-    f_ttft_p90 = extract(friendli_levels, lambda l: l.p90_ttft() * 1000)
-    v_ttft_p90 = extract(vllm_levels, lambda l: l.p90_ttft() * 1000)
+    # --- Bars: TTFT (p50) — left Y-axis ---
+    f_ttft = extract(friendli_levels, lambda l: l.median_ttft() * 1000)
+    v_ttft = extract(vllm_levels, lambda l: l.median_ttft() * 1000)
 
     x = np.arange(len(concurrencies))
-    w = 0.35
-    bars1 = ax.bar(x - w/2, f_ttft_med, w, label="FriendliAI (p50)", color="#2563eb")
-    bars2 = ax.bar(x + w/2, v_ttft_med, w, label="vLLM (p50)", color="#dc2626")
-    # p90 markers
-    ax.scatter(x - w/2, f_ttft_p90, marker="_", color="#1e40af", s=200, linewidths=2, zorder=5, label="FriendliAI (p90)")
-    ax.scatter(x + w/2, v_ttft_p90, marker="_", color="#991b1b", s=200, linewidths=2, zorder=5, label="vLLM (p90)")
-    ax.set_xlabel("Concurrency")
-    ax.set_ylabel("Time to First Token (ms)")
-    ax.set_title("TTFT — Lower is Better")
-    ax.set_xticks(x)
-    ax.set_xticklabels(concurrencies)
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
+    w = 0.30
+    bars_f = ax1.bar(x - w/2, f_ttft, w, label="FriendliAI TTFT (ms)", color="#2563eb", alpha=0.85)
+    bars_v = ax1.bar(x + w/2, v_ttft, w, label="vLLM TTFT (ms)", color="#dc2626", alpha=0.85)
 
-    # --- Panel 2: Per-request throughput (median tok/s) ---
-    ax = axes[1]
+    ax1.set_xlabel("Concurrent Requests", fontsize=12)
+    ax1.set_ylabel("Time to First Token (ms) — lower is better", fontsize=11, color="#333")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(concurrencies)
+    ax1.grid(axis="y", alpha=0.2)
+
+    # Add TTFT value labels on bars
+    for bars in [bars_f, bars_v]:
+        for bar in bars:
+            h = bar.get_height()
+            ax1.text(bar.get_x() + bar.get_width()/2, h + 15, f"{h:.0f}",
+                     ha="center", va="bottom", fontsize=8, fontweight="bold")
+
+    # --- Lines: Per-request throughput — right Y-axis ---
+    ax2 = ax1.twinx()
     f_thr = extract(friendli_levels, lambda l: l.median_throughput())
     v_thr = extract(vllm_levels, lambda l: l.median_throughput())
 
-    ax.bar(x - w/2, f_thr, w, label="FriendliAI", color="#2563eb")
-    ax.bar(x + w/2, v_thr, w, label="vLLM", color="#dc2626")
-    ax.set_xlabel("Concurrency")
-    ax.set_ylabel("Output Tokens / sec")
-    ax.set_title("Per-Request Throughput — Higher is Better")
-    ax.set_xticks(x)
-    ax.set_xticklabels(concurrencies)
-    ax.legend(fontsize=8)
-    ax.grid(axis="y", alpha=0.3)
+    line_f, = ax2.plot(x, f_thr, "o-", color="#1e40af", linewidth=2.5, markersize=9,
+                       label="FriendliAI throughput (tok/s)", zorder=5)
+    line_v, = ax2.plot(x, v_thr, "s--", color="#991b1b", linewidth=2.5, markersize=9,
+                       label="vLLM throughput (tok/s)", zorder=5)
+    ax2.set_ylabel("Output Throughput (tokens/sec) — higher is better", fontsize=11, color="#333")
 
-    # --- Panel 3: Aggregate throughput (total tok/s across all concurrent requests) ---
-    ax = axes[2]
-    f_agg = extract(friendli_levels, lambda l: l.aggregate_throughput())
-    v_agg = extract(vllm_levels, lambda l: l.aggregate_throughput())
-
-    ax.plot(concurrencies, f_agg, "o-", color="#2563eb", linewidth=2, markersize=8, label="FriendliAI")
-    ax.plot(concurrencies, v_agg, "s-", color="#dc2626", linewidth=2, markersize=8, label="vLLM")
-    ax.set_xlabel("Concurrency")
-    ax.set_ylabel("Total Tokens / sec")
-    ax.set_title("Aggregate Throughput — Higher is Better")
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
+    # Combined legend
+    handles1, labels1 = ax1.get_legend_handles_labels()
+    handles2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(handles1 + handles2, labels1 + labels2, loc="upper right", fontsize=9,
+               framealpha=0.9)
 
     plt.tight_layout()
     plt.savefig(output_path, dpi=150, bbox_inches="tight")

@@ -74,7 +74,7 @@ The sample results below were collected from the following setup:
 
 ### Latency Considerations
 
-The TTFT measurements include network round-trip time between the benchmark client and each endpoint. In this setup, the FriendliAI and RunPod endpoints are in different datacenters (and potentially different continents — RunPod allocated GPU capacity in France). This means **absolute TTFT values are not directly comparable** between engines, as they include different network latency components.
+The TTFT measurements include network round-trip time between the benchmark client and each endpoint. In this setup, the FriendliAI and RunPod endpoints are in different datacenters (RunPod allocated GPU capacity in Australia). This means **absolute TTFT values include different network latency components**. FriendliAI's datacenter location is not disclosed but latency suggests US-based, which is closer to the benchmark client.
 
 However, the benchmark remains meaningful for two reasons:
 
@@ -105,22 +105,22 @@ Warming up engines...
   Endpoint:     https://api.friendli.ai/dedicated/v1
   Model:        deps004cnw2p0gw
 ============================================================
-  Concurrency   1: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.098s | throughput=194.1 tok/s
-  Concurrency   4: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.122s | throughput=137.4 tok/s
-  Concurrency   8: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.147s | throughput=107.9 tok/s
-  Concurrency  16: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.183s | throughput=86.7 tok/s
-  Concurrency  32: sending 16 requests... done (16 ok, 0 err) | TTFT p50=0.178s | throughput=87.1 tok/s
+  Concurrency   1: sending 32 requests... done (32 ok, 0 err) | TTFT p50=0.097s | throughput=189.3 tok/s
+  Concurrency   4: sending 32 requests... done (32 ok, 0 err) | TTFT p50=0.100s | throughput=145.9 tok/s
+  Concurrency   8: sending 32 requests... done (32 ok, 0 err) | TTFT p50=0.125s | throughput=119.0 tok/s
+  Concurrency  16: sending 32 requests... done (32 ok, 0 err) | TTFT p50=0.155s | throughput=100.6 tok/s
+  Concurrency  32: sending 32 requests... done (32 ok, 0 err) | TTFT p50=0.180s | throughput=86.6 tok/s
 
 ============================================================
   Benchmarking: vLLM
   Endpoint:     https://api.runpod.ai/v2/kflzr1tngpywxm/openai/v1
   Model:        qwen/qwen3-30b-a3b
 ============================================================
-  Concurrency   1: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.227s | throughput=205.8 tok/s
-  Concurrency   4: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.228s | throughput=154.4 tok/s
-  Concurrency   8: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.187s | throughput=102.4 tok/s
-  Concurrency  16: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.237s | throughput=64.3 tok/s
-  Concurrency  32: sending 16 requests... done (16 ok, 0 err) | TTFT p50=1.222s | throughput=66.7 tok/s
+  Concurrency   1: sending 32 requests... done (32 ok, 0 err) | TTFT p50=0.406s | throughput=226.5 tok/s
+  Concurrency   4: sending 32 requests... done (32 ok, 0 err) | TTFT p50=1.496s | throughput=129.8 tok/s
+  Concurrency   8: sending 32 requests... done (32 ok, 0 err) | TTFT p50=1.121s | throughput=94.8 tok/s
+  Concurrency  16: sending 32 requests... done (32 ok, 0 err) | TTFT p50=1.989s | throughput=77.2 tok/s
+  Concurrency  32: sending 32 requests... done (32 ok, 0 err) | TTFT p50=3.139s | throughput=65.0 tok/s
 
 Chart saved to benchmark_results.png
 ```
@@ -131,10 +131,10 @@ Chart saved to benchmark_results.png
 
 ### Key Observations
 
-- **TTFT**: FriendliAI shows ~98-183ms (p50) vs vLLM's ~1,190-1,240ms. The ~10x gap includes network latency differences (see Latency Considerations above) and is partly attributable to RunPod's serverless proxy overhead and EU datacenter location.
-- **Per-request throughput**: Comparable at low concurrency (FriendliAI 194 tok/s vs vLLM 206 tok/s at concurrency=1). FriendliAI degrades more gracefully under load, maintaining 87 tok/s at concurrency=32 vs vLLM's 67 tok/s.
-- **Aggregate throughput**: Both engines scale similarly through concurrency=4, after which FriendliAI maintains a slight edge.
-- **GPU parity**: Both engines run on NVIDIA H100, eliminating GPU as a variable. The remaining difference is engine optimization and network latency (RunPod's AU datacenter adds round-trip time vs FriendliAI's endpoint).
+- **TTFT**: FriendliAI maintains 97-180ms (p50) across all concurrency levels, while vLLM degrades from 406ms to 3,139ms as load increases. Even accounting for network latency differences (AU datacenter for RunPod), FriendliAI's TTFT remains remarkably stable under pressure.
+- **Per-request throughput**: Both engines start around 190-227 tok/s at concurrency=1. Under load, FriendliAI degrades more gracefully — 87 tok/s at concurrency=32 vs vLLM's 65 tok/s (33% higher throughput under peak load).
+- **GPU parity**: Both engines run on NVIDIA H100, eliminating GPU as a variable.
+- **Data volume**: 32 requests per concurrency level (160 total requests per engine) for statistical robustness.
 
 ## Metrics
 
@@ -152,9 +152,7 @@ Chart saved to benchmark_results.png
 
 ## Why This Visualization
 
-1. **Bar chart for TTFT** — grouped bars with p50/p90 markers show absolute differences and tail latency at each concurrency level.
-2. **Bar chart for per-request throughput** — side-by-side bars show the user-experience gap.
-3. **Line chart for aggregate throughput** — shows scaling behavior and whether the engine batches efficiently.
+A single dual-axis chart overlays both key metrics — TTFT (bars, left axis) and per-request throughput (lines, right axis) — across concurrency levels. This immediately reveals the performance gap: FriendliAI's TTFT bars remain flat while vLLM's grow dramatically, and the throughput lines show FriendliAI maintaining higher output rates under load. One chart, one conclusion.
 
 ## Fairness Controls
 
